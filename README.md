@@ -1,6 +1,6 @@
-# BaraViteFe
+# BaraViteF
 
-BaraViteFe met en relation les clients avec des professionnels du secteur informel. Le projet comprend une interface React responsive et une API Node.js / Express connectée à MongoDB.
+BaraViteFais met en relation les clients avec des professionnels du secteur informel. Le projet comprend une interface React responsive et une API Node.js / Express connectée à MongoDB.
 
 ## Fonctionnalités du MVP
 
