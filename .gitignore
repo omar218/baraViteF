@@ -1,0 +1,10 @@
+node_modules/
+client/dist/
+server/.env
+server/.env.server
+server/Db.info
+.env
+.env.server
+.Db.info
+.env.example
+npm-debug.log*
