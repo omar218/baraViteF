@@ -6,5 +6,4 @@ server/Db.info
 .env
 .env.server
 .Db.info
-.env.example
 npm-debug.log*
