@@ -5,7 +5,8 @@ BaraViteFais met en relation les clients avec des professionnels du secteur info
 ## Fonctionnalités du MVP
 
 - Recherche de professionnels par métier, ville, nom ou description.
-- Filtres par métier et profils avec expérience, note et statut vérifié.
+- Filtres par métier, professionnels disponibles et recherche géolocalisée par proximité.
+- Formulaire d'inscription des professionnels avec position GeoJSON enregistrée dans MongoDB.
 - Formulaire de prise de contact enregistré dans MongoDB.
 - Jeu de données de démonstration pour découvrir l'interface.
 - Recherche vocale (navigateurs compatibles) et recherche de besoins formulés en langage naturel.
@@ -26,7 +27,7 @@ npm install --prefix client
 npm install --prefix server
 ```
 
-Copiez `.env.example` vers `server/.env` et renseignez `MONGODB_URI`. L'API charge également `server/.env.server` comme solution de repli si `MONGODB_URI` n'est pas défini dans `server/.env`. Pour MongoDB local, la valeur par défaut est :
+Renseignez `MONGODB_URI` dans `server/.env` ou `server/.env.server`. L'API et le script de données de démonstration chargent la configuration depuis ces emplacements, quel que soit le dossier depuis lequel ils sont lancés. Le fichier `.env.server` à la racine reste aussi accepté. Pour MongoDB local, la valeur est :
 
 ```env
 MONGODB_URI=mongodb://127.0.0.1:27017/BaraViteFe
@@ -34,7 +35,9 @@ PORT=5000
 CLIENT_URL=http://localhost:5173
 ```
 
-Avec MongoDB démarré, chargez les professionnels de démonstration :
+Avec MongoDB Atlas, ajoutez l'adresse IP de votre machine dans **Network Access** du cluster. N'autorisez pas toutes les adresses (`0.0.0.0/0`) pour contourner ce contrôle.
+
+Avec MongoDB démarré, ajoutez ou mettez à jour les professionnels de démonstration sans supprimer les autres profils :
 
 ```bash
 npm run seed --prefix server
@@ -51,8 +54,12 @@ L'interface est disponible à [http://localhost:5173](http://localhost:5173) et 
 ## API
 
 - `GET /api/health` — état de l'API et de MongoDB.
-- `GET /api/professionals?search=...&trade=...` — recherche (maximum 50 résultats).
+- `GET /api/professionals?search=...&trade=...` — recherche des professionnels disponibles (maximum 50 résultats).
+- `GET /api/professionals?lat=...&lng=...` — trie les profils disponibles ayant une position enregistrée, du plus proche au plus éloigné.
+- `POST /api/professionals` — crée un profil professionnel à partir de `name`, `trade`, `city`, `description`, `phone`, `experience` et `location` (`{ "type": "Point", "coordinates": [longitude, latitude] }`).
 - `POST /api/professionals/:id/contact` — enregistre une demande de contact. Corps JSON : `{ "name": "...", "phone": "...", "message": "..." }`.
+
+La géolocalisation du navigateur nécessite l'accord de l'utilisateur et un contexte sécurisé (HTTPS ou localhost). Les profils existants sans coordonnées restent visibles dans l'annuaire classique, mais pas dans la recherche par proximité.
 
 ## Fondations des modules stratégiques
 

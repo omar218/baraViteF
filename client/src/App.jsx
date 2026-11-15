@@ -29,13 +29,56 @@ function initials(name = "") {
   return name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
 }
 
-async function fetchProfessionals(search, trade) {
+function locationErrorMessage(error) {
+  if (error.code === 1) return "Autorisez l'accès à votre position dans les réglages du navigateur.";
+  if (error.code === 2) return "Votre position ne peut pas être déterminée.";
+  if (error.code === 3) return "La demande de localisation a expiré. Réessayez.";
+  return "La géolocalisation n'est pas disponible sur cet appareil.";
+}
+
+function getCurrentLocation() {
+  if (!navigator.geolocation) {
+    return Promise.reject(new Error("La géolocalisation n'est pas disponible sur cet appareil."));
+  }
+
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => resolve({ latitude: coords.latitude, longitude: coords.longitude }),
+      (error) => reject(new Error(locationErrorMessage(error))),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    );
+  });
+}
+
+function requestErrorMessage(error, fallback) {
+  return error instanceof TypeError ? fallback : error.message || fallback;
+}
+
+async function readApiResponse(response, fallbackError) {
+  const contentType = response.headers.get("content-type") || "";
+  if (!response.ok) {
+    if (contentType.includes("application/json")) {
+      const result = await response.json();
+      throw new Error(result.message || fallbackError);
+    }
+    throw new Error(fallbackError);
+  }
+  if (!contentType.includes("application/json")) {
+    throw new Error("Le serveur a renvoyé une réponse invalide.");
+  }
+  return response.json();
+}
+
+async function fetchProfessionals(search, trade, location) {
   const query = new URLSearchParams();
   if (search) query.set("search", search);
   if (trade) query.set("trade", trade);
+  if (location) {
+    query.set("lat", String(location.latitude));
+    query.set("lng", String(location.longitude));
+  }
   const response = await fetch(`/api/professionals?${query}`);
-  if (!response.ok) throw new Error("Impossible de charger les professionnels.");
-  return response.json();
+  return readApiResponse(response, "Impossible de charger les professionnels.");
 }
 
 function ContactDialog({ professional, onClose }) {
@@ -55,12 +98,11 @@ function ContactDialog({ professional, onClose }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form)
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.message || "Votre demande n'a pas pu être envoyée.");
+      const result = await readApiResponse(response, "Votre demande n'a pas pu être envoyée.");
       setStatus({ kind: "success", text: result.message });
       setForm({ name: "", phone: "", message: "" });
     } catch (error) {
-      setStatus({ kind: "error", text: error.message });
+      setStatus({ kind: "error", text: requestErrorMessage(error, "Connexion impossible. Réessayez dans quelques instants.") });
     } finally {
       setSending(false);
     }
@@ -96,11 +138,120 @@ function ContactDialog({ professional, onClose }) {
   );
 }
 
+function ProfessionalRegistrationDialog({ onClose, onRegistered }) {
+  const [form, setForm] = useState({
+    name: "",
+    trade: "",
+    city: "",
+    phone: "",
+    experience: "",
+    description: "",
+    location: null
+  });
+  const [status, setStatus] = useState({ kind: "", text: "" });
+  const [locationStatus, setLocationStatus] = useState({ kind: "", text: "" });
+  const [locating, setLocating] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
+  async function captureLocation() {
+    setLocating(true);
+    setLocationStatus({ kind: "", text: "" });
+    try {
+      const location = await getCurrentLocation();
+      setForm((current) => ({
+        ...current,
+        location: { type: "Point", coordinates: [location.longitude, location.latitude] }
+      }));
+      setLocationStatus({ kind: "success", text: "Position enregistrée." });
+    } catch (error) {
+      setLocationStatus({ kind: "error", text: error.message });
+    } finally {
+      setLocating(false);
+    }
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    setSending(true);
+    setStatus({ kind: "", text: "" });
+    try {
+      const response = await fetch("/api/professionals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...form, experience: Number(form.experience) })
+      });
+      const result = await readApiResponse(response, "L'inscription n'a pas pu être envoyée.");
+      setStatus({ kind: "success", text: result.message });
+      setSubmitted(true);
+      onRegistered();
+    } catch (error) {
+      setStatus({ kind: "error", text: requestErrorMessage(error, "Connexion impossible. Réessayez dans quelques instants.") });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="contact-dialog registration-dialog" role="dialog" aria-modal="true" aria-labelledby="registration-title">
+        <button className="dialog-close" type="button" onClick={onClose} aria-label="Fermer">×</button>
+        <span className="eyebrow">REJOIGNEZ LA PLATEFORME</span>
+        <h2 id="registration-title">Inscrivez votre profil professionnel</h2>
+        <p>Renseignez vos informations pour créer votre profil dans l'annuaire.</p>
+        {status.text && <div className={`form-status ${status.kind}`} role="status">{status.text}</div>}
+        {!submitted ? (
+          <form onSubmit={submit} className="contact-form">
+            <label>
+              Nom complet
+              <input required maxLength="80" autoComplete="name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Ex. Aïcha Coulibaly" />
+            </label>
+            <label>
+              Métier
+              <input required maxLength="60" value={form.trade} onChange={(event) => setForm({ ...form, trade: event.target.value })} placeholder="Ex. Plombière" />
+            </label>
+            <label>
+              Ville
+              <input required maxLength="80" autoComplete="address-level2" value={form.city} onChange={(event) => setForm({ ...form, city: event.target.value })} placeholder="Ex. Abidjan" />
+            </label>
+            <div className="location-field">
+              <span className="location-field-label">Votre position</span>
+              <p>Obligatoire pour apparaître près des clients. Votre position exacte reste privée ; seule la distance est affichée.</p>
+              <button className="button button-light" type="button" onClick={captureLocation} disabled={locating || sending}>
+                {locating ? "Localisation en cours…" : form.location ? "Position enregistrée ✓" : "Utiliser ma position actuelle"}
+              </button>
+              {locationStatus.text && <span className={`location-message ${locationStatus.kind}`} role={locationStatus.kind === "error" ? "alert" : "status"}>{locationStatus.text}</span>}
+            </div>
+            <label>
+              Téléphone
+              <input required maxLength="30" type="tel" autoComplete="tel" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="+225 07 00 00 00 00" />
+            </label>
+            <label>
+              Années d'expérience
+              <input required type="number" min="0" max="80" step="1" value={form.experience} onChange={(event) => setForm({ ...form, experience: event.target.value })} />
+            </label>
+            <label>
+              Présentez vos services
+              <textarea required maxLength="1000" rows="4" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Décrivez vos services et votre expérience…" />
+            </label>
+            <button className="button button-dark submit-button" type="submit" disabled={sending || !form.location}>
+              {sending ? "Inscription en cours…" : "Créer mon profil"} <span aria-hidden="true">↗</span>
+            </button>
+          </form>
+        ) : (
+          <button className="button button-dark submit-button" type="button" onClick={onClose}>Terminer</button>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function ProfessionalCard({ professional, index, onContact }) {
   return (
     <article className="professional-card">
       <div className="card-top">
         <div className={`avatar ${categoryColors[index % categoryColors.length]}`} aria-hidden="true">{initials(professional.name)}</div>
+        <span className="availability-badge"><span aria-hidden="true">●</span> Disponible</span>
         {professional.verified && <span className="verified"><span aria-hidden="true">✓</span> Vérifié</span>}
         <span className="rating"><span aria-hidden="true">★</span> {Number(professional.rating || 0).toFixed(1)}</span>
       </div>
@@ -108,6 +259,11 @@ function ProfessionalCard({ professional, index, onContact }) {
         <span className="trade">{professional.trade}</span>
         <h3>{professional.name}</h3>
         <p className="location"><span aria-hidden="true">⌖</span> {professional.city} <span className="dot">·</span> {professional.experience} ans d'expérience</p>
+        {Number.isFinite(professional.distanceMeters) && (
+          <p className="professional-distance">À {professional.distanceMeters < 1000
+            ? `${Math.round(professional.distanceMeters)} m`
+            : `${(professional.distanceMeters / 1000).toFixed(1)} km`} de vous</p>
+        )}
         <p className="description">{professional.description}</p>
       </div>
       <button className="button button-light card-contact" type="button" onClick={() => onContact(professional)}>
@@ -124,6 +280,11 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [contacting, setContacting] = useState(null);
+  const [registering, setRegistering] = useState(false);
+  const [professionalsVersion, setProfessionalsVersion] = useState(0);
+  const [clientLocation, setClientLocation] = useState(null);
+  const [locationStatus, setLocationStatus] = useState({ kind: "", text: "" });
+  const [locatingClient, setLocatingClient] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [voiceMessage, setVoiceMessage] = useState("");
   const SpeechRecognition = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -132,18 +293,20 @@ export default function App() {
     let active = true;
     setLoading(true);
     setError("");
-    fetchProfessionals(search, activeTrade)
+    fetchProfessionals(search, activeTrade, clientLocation)
       .then((items) => {
         if (active) setProfessionals(items);
       })
       .catch((requestError) => {
-        if (active) setError(`${requestError.message} Vérifiez que le serveur et MongoDB sont démarrés.`);
+        if (active) {
+          setError(`${requestErrorMessage(requestError, "Connexion impossible.")} Vérifiez que le serveur et MongoDB sont démarrés.`);
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [search, activeTrade]);
+  }, [search, activeTrade, clientLocation, professionalsVersion]);
 
   function submitSearch(event) {
     event.preventDefault();
@@ -172,6 +335,26 @@ export default function App() {
     setActiveTrade(label === "Tous les métiers" ? "" : label);
   }
 
+  async function toggleNearbyProfessionals() {
+    if (clientLocation) {
+      setClientLocation(null);
+      setLocationStatus({ kind: "", text: "" });
+      return;
+    }
+
+    setLocatingClient(true);
+    setLocationStatus({ kind: "", text: "" });
+    try {
+      const location = await getCurrentLocation();
+      setClientLocation(location);
+      setLocationStatus({ kind: "success", text: "Les professionnels disponibles sont triés par proximité." });
+    } catch (error) {
+      setLocationStatus({ kind: "error", text: error.message });
+    } finally {
+      setLocatingClient(false);
+    }
+  }
+
   function exploreUniverse(searchTerm) {
     setActiveTrade("");
     setSearchInput(searchTerm);
@@ -181,6 +364,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#artisans">Aller directement aux professionnels</a>
       <header className="site-header">
         <a className="brand" href="#" aria-label="BaraViteFe, accueil">
           <img src="/logo1.jpeg" alt="BaraViteFe" className="brand-logo" />
@@ -191,7 +375,11 @@ export default function App() {
           <a href="#artisans">Trouver un pro</a>
           <a href="#comment-ca-marche">Comment ça marche</a>
         </nav>
-        <a className="pro-link" href="#artisans">Vous êtes artisan ? <span aria-hidden="true">↗</span></a>
+        <button className="pro-link" type="button" onClick={() => setRegistering(true)}>
+          <span className="pro-link-full">Vous êtes artisan ?</span>
+          <span className="pro-link-compact">Devenir pro</span>
+          <span className="pro-link-arrow" aria-hidden="true">↗</span>
+        </button>
       </header>
 
       <main>
@@ -207,7 +395,7 @@ export default function App() {
               <span className="search-divider" />
               <span className="search-pin" aria-hidden="true">⌖</span>
               <span className="search-city">Côte d'Ivoire</span>
-              <button type="submit" aria-label="Rechercher">→</button>
+              <button className="search-submit" type="submit" aria-label="Rechercher">→</button>
             </form>
             {voiceMessage && <p className="voice-message" role="status">{voiceMessage}</p>}
             <div className="cta-row">
@@ -266,6 +454,13 @@ export default function App() {
             </div>
             <p>Des artisans passionnés, près de chez vous.<br />Le savoir-faire local n'a jamais été aussi proche.</p>
           </div>
+          <div className="nearby-control">
+            <button className="location-button" type="button" onClick={toggleNearbyProfessionals} disabled={locatingClient} aria-pressed={Boolean(clientLocation)}>
+              <span aria-hidden="true">⌖</span>
+              {locatingClient ? "Localisation en cours…" : clientLocation ? "Désactiver le tri par proximité" : "Voir les professionnels près de moi"}
+            </button>
+            {locationStatus.text && <span className={`location-message ${locationStatus.kind}`} role={locationStatus.kind === "error" ? "alert" : "status"}>{locationStatus.text}</span>}
+          </div>
           <div className="category-list" role="group" aria-label="Filtrer par métier">
             {categories.map((category) => {
               const selected = (category.label === "Tous les métiers" && !activeTrade) || category.label === activeTrade;
@@ -278,12 +473,16 @@ export default function App() {
           </div>
           <div className="results-row">
             <h3>Les pros du moment <span>({professionals.length})</span></h3>
-            <span className="sort-note">Les mieux notés <span aria-hidden="true">⌄</span></span>
+            <span className="sort-note">{clientLocation ? "Triés par proximité" : "Les mieux notés"}</span>
           </div>
           {loading && <div className="notice" role="status">Recherche des professionnels…</div>}
           {!loading && error && <div className="notice notice-error" role="alert">{error}</div>}
           {!loading && !error && professionals.length === 0 && (
-            <div className="notice">Aucun professionnel ne correspond à cette recherche. Essayez un autre métier ou une autre ville.</div>
+            <div className="notice">
+              {clientLocation
+                ? "Aucun professionnel disponible avec une position enregistrée ne correspond à cette recherche."
+                : "Aucun professionnel ne correspond à cette recherche. Essayez un autre métier ou une autre ville."}
+            </div>
           )}
           {!loading && !error && professionals.length > 0 && (
             <div className="professional-grid">
@@ -308,9 +507,15 @@ export default function App() {
       <footer className="site-footer">
         <a className="brand footer-brand" href="#" aria-label="BaraViteFe, accueil"><img src="/logo1.jpeg" alt="BaraViteFe" className="brand-logo" /><span className="brand-name">BaraViteFe</span></a>
         <span>Le savoir-faire local, à portée de main.</span>
-        <span>© 2026 BaraViteFe · Côte d'Ivoire</span>
+        <span>© 2027 BaraViteFe · Côte d'Ivoire</span>
       </footer>
       <ContactDialog professional={contacting} onClose={() => setContacting(null)} />
+      {registering && (
+        <ProfessionalRegistrationDialog
+          onClose={() => setRegistering(false)}
+          onRegistered={() => setProfessionalsVersion((version) => version + 1)}
+        />
+      )}
     </div>
   );
 }

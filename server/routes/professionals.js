@@ -1,7 +1,9 @@
 import { Router } from "express";
 import mongoose from "mongoose";
 import ContactRequest from "../models/ContactRequest.js";
-import Professional from "../models/Professional.js";
+import Professional from "../models/Professionals.js";
+import { parseGeoPoint } from "../services/geolocation.js";
+import { validateProfessionalRegistration } from "../services/professional-registration.js";
 import { getSearchTerms } from "../services/search.js";
 
 const router = Router();
@@ -10,8 +12,27 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+router.post("/", async (req, res, next) => {
+  const registration = validateProfessionalRegistration(req.body);
+  if (registration.error) {
+    return res.status(400).json({ message: registration.error });
+  }
+
+  try {
+    await Professional.create(registration.data);
+    res.status(201).json({ message: "Votre profil professionnel a bien été créé." });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get("/", async (req, res, next) => {
   try {
+    const geolocation = parseGeoPoint(req.query.lat, req.query.lng);
+    if (geolocation.error) {
+      return res.status(400).json({ message: geolocation.error });
+    }
+
     const filter = { available: true };
     const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 80) : "";
 
@@ -44,7 +65,35 @@ router.get("/", async (req, res, next) => {
       filter.trade = new RegExp(`^${escapeRegex(req.query.trade.trim().slice(0, 60))}$`, "i");
     }
 
-    const professionals = await Professional.find(filter).sort({ rating: -1, verified: -1, name: 1 }).limit(50);
+    const professionals = geolocation.point
+      ? await Professional.aggregate([
+          {
+            $geoNear: {
+              near: geolocation.point,
+              distanceField: "distanceMeters",
+              spherical: true,
+              key: "location",
+              query: filter
+            }
+          },
+          {
+            $project: {
+              name: 1,
+              trade: 1,
+              city: 1,
+              description: 1,
+              experience: 1,
+              rating: 1,
+              verified: 1,
+              distanceMeters: 1
+            }
+          },
+          { $limit: 50 }
+        ])
+      : await Professional.find(filter)
+          .select("name trade city description experience rating verified")
+          .sort({ rating: -1, verified: -1, name: 1 })
+          .limit(50);
     res.json(professionals);
   } catch (error) {
     next(error);

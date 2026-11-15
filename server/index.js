@@ -1,13 +1,8 @@
-import dotenv from "dotenv";
 import cors from "cors";
 import express from "express";
 import mongoose from "mongoose";
+import "./config/load-env.js";
 import professionalsRouter from "./routes/professionals.js";
-
-dotenv.config();
-if (!process.env.MONGODB_URI) {
-  dotenv.config({ path: ".env.server" });
-}
 
 const app = express();
 const port = Number(process.env.PORT) || 5000;
@@ -26,7 +21,7 @@ app.use((error, _req, res, _next) => {
 });
 
 if (!process.env.MONGODB_URI) {
-  console.error("La variable MONGODB_URI est obligatoire. Copiez .env.example dans server/.env et configurez MongoDB.");
+  console.error("La variable MONGODB_URI est obligatoire. Configurez-la dans server/.env ou server/.env.server.");
   process.exit(1);
 }
 
@@ -36,5 +31,6 @@ try {
   app.listen(port, () => console.log(`API BaraViteFe disponible sur http://localhost:${port}`));
 } catch (error) {
   console.error("Impossible de se connecter à MongoDB :", error.message);
+  console.error("Vérifiez l'URI MongoDB et l'accès réseau. Avec Atlas, autorisez votre adresse IP dans Network Access.");
   process.exit(1);
 }
