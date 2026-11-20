@@ -380,7 +380,7 @@ export default function App() {
           <Link to="/confidentialite">Confidentialité</Link>
           <Link to="/cgu">CGU</Link>
         </nav>
-        <span>© 2026 Barra Rapide · Côte d'Ivoire</span>
+        <span>© 2028 Barra Rapide · Côte d'Ivoire</span>
       </footer>
     </div>
   );
