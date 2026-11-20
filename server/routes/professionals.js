@@ -1,9 +1,10 @@
 import { Router } from "express";
 import mongoose from "mongoose";
+import ConnectionUnlock from "../models/ConnectionUnlock.js";
 import ContactRequest from "../models/ContactRequest.js";
 import Professional from "../models/Professionals.js";
+import { authorize, protect } from "../middlewares/auth.js";
 import { parseGeoPoint } from "../services/geolocation.js";
-import { validateProfessionalRegistration } from "../services/professional-registration.js";
 import { getSearchTerms } from "../services/search.js";
 
 const router = Router();
@@ -11,20 +12,6 @@ const router = Router();
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-
-router.post("/", async (req, res, next) => {
-  const registration = validateProfessionalRegistration(req.body);
-  if (registration.error) {
-    return res.status(400).json({ message: registration.error });
-  }
-
-  try {
-    await Professional.create(registration.data);
-    res.status(201).json({ message: "Votre profil professionnel a bien été créé." });
-  } catch (error) {
-    next(error);
-  }
-});
 
 router.get("/", async (req, res, next) => {
   try {
@@ -100,7 +87,7 @@ router.get("/", async (req, res, next) => {
   }
 });
 
-router.post("/:id/contact", async (req, res, next) => {
+router.post("/:id/contact", protect, authorize("client"), async (req, res, next) => {
   try {
     const { name, phone, message = "" } = req.body;
     if (!mongoose.isValidObjectId(req.params.id)) {
@@ -118,6 +105,13 @@ router.post("/:id/contact", async (req, res, next) => {
     if (!professional || !professional.available) {
       return res.status(404).json({ message: "Ce professionnel n'est pas disponible." });
     }
+    const unlocked = await ConnectionUnlock.exists({
+      clientId: req.user._id,
+      proId: professional._id
+    });
+    if (!unlocked) {
+      return res.status(403).json({ message: "Débloquez d'abord ce contact depuis son profil." });
+    }
 
     const request = await ContactRequest.create({
       professional: professional._id,
@@ -125,7 +119,7 @@ router.post("/:id/contact", async (req, res, next) => {
       phone: phone.trim(),
       message: message.trim()
     });
-    res.status(201).json({ message: "Votre demande a bien été envoyée.", id: request.id });
+    res.status(201).json({ message: "Votre demande a bien été enregistrée.", id: request.id });
   } catch (error) {
     next(error);
   }

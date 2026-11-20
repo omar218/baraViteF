@@ -14,5 +14,4 @@ const envPaths = [
 
 for (const path of new Set(envPaths)) {
   dotenv.config({ path });
-  if (process.env.MONGODB_URI) break;
 }
