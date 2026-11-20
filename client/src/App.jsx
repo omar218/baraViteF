@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import api from "./api.js";
+import { useAuth } from "./AuthContext.jsx";
 
 const categories = [
   { label: "Tous les métiers", icon: "✳" },
@@ -7,6 +10,13 @@ const categories = [
   { label: "Mécanicien", icon: "⚙" },
   { label: "Menuisier", icon: "⌑" },
   { label: "Peintre", icon: "◒" }
+];
+
+const quickServices = [
+  { title: "Électricité", detail: "Pannes & installations", icon: "ϟ", search: "électricien" },
+  { title: "Plomberie", detail: "Fuites & sanitaires", icon: "⌁", search: "plombier" },
+  { title: "Informatique", detail: "Dépannage & réseau", icon: "⌘", search: "informatique" },
+  { title: "Urgence 24/7", detail: "Un pro près de vous", icon: "↗", search: "urgence technique" }
 ];
 
 const universes = [
@@ -51,207 +61,30 @@ function getCurrentLocation() {
 }
 
 function requestErrorMessage(error, fallback) {
-  return error instanceof TypeError ? fallback : error.message || fallback;
+  return error.response?.data?.message || (error instanceof TypeError ? fallback : error.message || fallback);
 }
 
-async function readApiResponse(response, fallbackError) {
-  const contentType = response.headers.get("content-type") || "";
-  if (!response.ok) {
-    if (contentType.includes("application/json")) {
-      const result = await response.json();
-      throw new Error(result.message || fallbackError);
-    }
-    throw new Error(fallbackError);
-  }
-  if (!contentType.includes("application/json")) {
-    throw new Error("Le serveur a renvoyé une réponse invalide.");
-  }
-  return response.json();
-}
-
-async function fetchProfessionals(search, trade, location) {
+async function fetchProfessionals(search, trade, location, city, neighborhood, available) {
   const query = new URLSearchParams();
   if (search) query.set("search", search);
   if (trade) query.set("trade", trade);
+  if (city) query.set("city", city);
+  if (neighborhood) query.set("neighborhood", neighborhood);
+  query.set("available", available);
   if (location) {
     query.set("lat", String(location.latitude));
     query.set("lng", String(location.longitude));
   }
-  const response = await fetch(`/api/professionals?${query}`);
-  return readApiResponse(response, "Impossible de charger les professionnels.");
+  const { data } = await api.get(`/pros?${query}`);
+  return data;
 }
 
-function ContactDialog({ professional, onClose }) {
-  const [form, setForm] = useState({ name: "", phone: "", message: "" });
-  const [status, setStatus] = useState({ kind: "", text: "" });
-  const [sending, setSending] = useState(false);
-
-  if (!professional) return null;
-
-  async function submit(event) {
-    event.preventDefault();
-    setSending(true);
-    setStatus({ kind: "", text: "" });
-    try {
-      const response = await fetch(`/api/professionals/${professional._id}/contact`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form)
-      });
-      const result = await readApiResponse(response, "Votre demande n'a pas pu être envoyée.");
-      setStatus({ kind: "success", text: result.message });
-      setForm({ name: "", phone: "", message: "" });
-    } catch (error) {
-      setStatus({ kind: "error", text: requestErrorMessage(error, "Connexion impossible. Réessayez dans quelques instants.") });
-    } finally {
-      setSending(false);
-    }
-  }
-
-  return (
-    <div className="dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="contact-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
-        <button className="dialog-close" type="button" onClick={onClose} aria-label="Fermer">×</button>
-        <span className="eyebrow">PRISE DE CONTACT</span>
-        <h2 id="dialog-title">Contacter {professional.name}</h2>
-        <p>Envoyez votre demande à {professional.name}, {professional.trade.toLowerCase()} à {professional.city}.</p>
-        {status.text && <div className={`form-status ${status.kind}`} role="status">{status.text}</div>}
-        <form onSubmit={submit} className="contact-form">
-          <label>
-            Votre nom
-            <input required maxLength="80" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Ex. Marie Konan" />
-          </label>
-          <label>
-            Votre téléphone
-            <input required maxLength="30" type="tel" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="+225 07 00 00 00 00" />
-          </label>
-          <label>
-            Votre besoin <span className="optional">(facultatif)</span>
-            <textarea maxLength="1000" rows="3" value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} placeholder="Décrivez brièvement votre demande…" />
-          </label>
-          <button className="button button-dark submit-button" type="submit" disabled={sending}>
-            {sending ? "Envoi en cours…" : "Envoyer ma demande"} <span aria-hidden="true">↗</span>
-          </button>
-        </form>
-      </section>
-    </div>
-  );
-}
-
-function ProfessionalRegistrationDialog({ onClose, onRegistered }) {
-  const [form, setForm] = useState({
-    name: "",
-    trade: "",
-    city: "",
-    phone: "",
-    experience: "",
-    description: "",
-    location: null
-  });
-  const [status, setStatus] = useState({ kind: "", text: "" });
-  const [locationStatus, setLocationStatus] = useState({ kind: "", text: "" });
-  const [locating, setLocating] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-
-  async function captureLocation() {
-    setLocating(true);
-    setLocationStatus({ kind: "", text: "" });
-    try {
-      const location = await getCurrentLocation();
-      setForm((current) => ({
-        ...current,
-        location: { type: "Point", coordinates: [location.longitude, location.latitude] }
-      }));
-      setLocationStatus({ kind: "success", text: "Position enregistrée." });
-    } catch (error) {
-      setLocationStatus({ kind: "error", text: error.message });
-    } finally {
-      setLocating(false);
-    }
-  }
-
-  async function submit(event) {
-    event.preventDefault();
-    setSending(true);
-    setStatus({ kind: "", text: "" });
-    try {
-      const response = await fetch("/api/professionals", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, experience: Number(form.experience) })
-      });
-      const result = await readApiResponse(response, "L'inscription n'a pas pu être envoyée.");
-      setStatus({ kind: "success", text: result.message });
-      setSubmitted(true);
-      onRegistered();
-    } catch (error) {
-      setStatus({ kind: "error", text: requestErrorMessage(error, "Connexion impossible. Réessayez dans quelques instants.") });
-    } finally {
-      setSending(false);
-    }
-  }
-
-  return (
-    <div className="dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="contact-dialog registration-dialog" role="dialog" aria-modal="true" aria-labelledby="registration-title">
-        <button className="dialog-close" type="button" onClick={onClose} aria-label="Fermer">×</button>
-        <span className="eyebrow">REJOIGNEZ LA PLATEFORME</span>
-        <h2 id="registration-title">Inscrivez votre profil professionnel</h2>
-        <p>Renseignez vos informations pour créer votre profil dans l'annuaire.</p>
-        {status.text && <div className={`form-status ${status.kind}`} role="status">{status.text}</div>}
-        {!submitted ? (
-          <form onSubmit={submit} className="contact-form">
-            <label>
-              Nom complet
-              <input required maxLength="80" autoComplete="name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Ex. Aïcha Coulibaly" />
-            </label>
-            <label>
-              Métier
-              <input required maxLength="60" value={form.trade} onChange={(event) => setForm({ ...form, trade: event.target.value })} placeholder="Ex. Plombière" />
-            </label>
-            <label>
-              Ville
-              <input required maxLength="80" autoComplete="address-level2" value={form.city} onChange={(event) => setForm({ ...form, city: event.target.value })} placeholder="Ex. Abidjan" />
-            </label>
-            <div className="location-field">
-              <span className="location-field-label">Votre position</span>
-              <p>Obligatoire pour apparaître près des clients. Votre position exacte reste privée ; seule la distance est affichée.</p>
-              <button className="button button-light" type="button" onClick={captureLocation} disabled={locating || sending}>
-                {locating ? "Localisation en cours…" : form.location ? "Position enregistrée ✓" : "Utiliser ma position actuelle"}
-              </button>
-              {locationStatus.text && <span className={`location-message ${locationStatus.kind}`} role={locationStatus.kind === "error" ? "alert" : "status"}>{locationStatus.text}</span>}
-            </div>
-            <label>
-              Téléphone
-              <input required maxLength="30" type="tel" autoComplete="tel" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="+225 07 00 00 00 00" />
-            </label>
-            <label>
-              Années d'expérience
-              <input required type="number" min="0" max="80" step="1" value={form.experience} onChange={(event) => setForm({ ...form, experience: event.target.value })} />
-            </label>
-            <label>
-              Présentez vos services
-              <textarea required maxLength="1000" rows="4" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Décrivez vos services et votre expérience…" />
-            </label>
-            <button className="button button-dark submit-button" type="submit" disabled={sending || !form.location}>
-              {sending ? "Inscription en cours…" : "Créer mon profil"} <span aria-hidden="true">↗</span>
-            </button>
-          </form>
-        ) : (
-          <button className="button button-dark submit-button" type="button" onClick={onClose}>Terminer</button>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function ProfessionalCard({ professional, index, onContact }) {
+function ProfessionalCard({ professional, index }) {
   return (
     <article className="professional-card">
       <div className="card-top">
         <div className={`avatar ${categoryColors[index % categoryColors.length]}`} aria-hidden="true">{initials(professional.name)}</div>
-        <span className="availability-badge"><span aria-hidden="true">●</span> Disponible</span>
+        <span className={`availability-badge${professional.available ? "" : " unavailable"}`}><span aria-hidden="true">●</span> {professional.available ? "Disponible" : "Indisponible"}</span>
         {professional.verified && <span className="verified"><span aria-hidden="true">✓</span> Vérifié</span>}
         <span className="rating"><span aria-hidden="true">★</span> {Number(professional.rating || 0).toFixed(1)}</span>
       </div>
@@ -266,9 +99,9 @@ function ProfessionalCard({ professional, index, onContact }) {
         )}
         <p className="description">{professional.description}</p>
       </div>
-      <button className="button button-light card-contact" type="button" onClick={() => onContact(professional)}>
-        Contacter <span aria-hidden="true">↗</span>
-      </button>
+      <Link className="button button-light card-contact" to={`/pros/${professional._id}`}>
+        Voir le profil et les coordonnées <span aria-hidden="true">↗</span>
+      </Link>
     </article>
   );
 }
@@ -276,24 +109,28 @@ function ProfessionalCard({ professional, index, onContact }) {
 export default function App() {
   const [search, setSearch] = useState("");
   const [activeTrade, setActiveTrade] = useState("");
+  const [cityFilter, setCityFilter] = useState("");
+  const [neighborhoodFilter, setNeighborhoodFilter] = useState("");
+  const [availabilityFilter, setAvailabilityFilter] = useState("true");
+  const [cityInput, setCityInput] = useState("");
+  const [neighborhoodInput, setNeighborhoodInput] = useState("");
+  const [availabilityInput, setAvailabilityInput] = useState("true");
   const [professionals, setProfessionals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [contacting, setContacting] = useState(null);
-  const [registering, setRegistering] = useState(false);
-  const [professionalsVersion, setProfessionalsVersion] = useState(0);
   const [clientLocation, setClientLocation] = useState(null);
   const [locationStatus, setLocationStatus] = useState({ kind: "", text: "" });
   const [locatingClient, setLocatingClient] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [voiceMessage, setVoiceMessage] = useState("");
   const SpeechRecognition = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
+  const { user, logout, sessionError } = useAuth();
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError("");
-    fetchProfessionals(search, activeTrade, clientLocation)
+    fetchProfessionals(search, activeTrade, clientLocation, cityFilter, neighborhoodFilter, availabilityFilter)
       .then((items) => {
         if (active) setProfessionals(items);
       })
@@ -306,11 +143,14 @@ export default function App() {
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [search, activeTrade, clientLocation, professionalsVersion]);
+  }, [search, activeTrade, clientLocation, cityFilter, neighborhoodFilter, availabilityFilter]);
 
-  function submitSearch(event) {
+  function submitFilters(event) {
     event.preventDefault();
     setSearch(searchInput.trim());
+    setCityFilter(cityInput.trim());
+    setNeighborhoodFilter(neighborhoodInput.trim());
+    setAvailabilityFilter(availabilityInput);
   }
 
   function startVoiceSearch() {
@@ -366,37 +206,53 @@ export default function App() {
     <div className="app-shell">
       <a className="skip-link" href="#artisans">Aller directement aux professionnels</a>
       <header className="site-header">
-        <a className="brand" href="#" aria-label="BaraViteFe, accueil">
-          <img src="/logo1.jpeg" alt="BaraViteFe" className="brand-logo" />
-          <span className="brand-name">BaraViteFe</span>
+        <a className="brand" href="#" aria-label="Barra Rapide, accueil">
+          <img src="/logo1.jpeg" alt="Barra Rapide" className="brand-logo" />
+          <span className="brand-name">Barra Rapide</span>
         </a>
         <nav className="main-nav" aria-label="Navigation principale">
           <a className="nav-active" href="#univers">Nos 11 univers</a>
           <a href="#artisans">Trouver un pro</a>
           <a href="#comment-ca-marche">Comment ça marche</a>
         </nav>
-        <button className="pro-link" type="button" onClick={() => setRegistering(true)}>
+        <Link className="pro-link" to="/inscription?role=pro">
           <span className="pro-link-full">Vous êtes artisan ?</span>
           <span className="pro-link-compact">Devenir pro</span>
           <span className="pro-link-arrow" aria-hidden="true">↗</span>
-        </button>
+        </Link>
+        {user ? (
+          <button className="account-nav" type="button" onClick={logout}>Déconnexion</button>
+        ) : (
+          <Link className="account-nav" to="/connexion">Connexion</Link>
+        )}
       </header>
 
       <main>
+        {sessionError && <div className="session-alert" role="status">{sessionError}</div>}
         <section className="hero">
           <div className="hero-copy">
             <div className="hero-badge">Service rapide 24/7 • Côte d'Ivoire</div>
             <h1>Votre prochain service,<br />en <span>quelques minutes.</span></h1>
             <p className="hero-description">Trouvez un professionnel fiable pour les urgences, les travaux, les soins et les démarches du quotidien, près de chez vous.</p>
-            <form className="search-bar" onSubmit={submitSearch}>
-              <span className="search-icon" aria-hidden="true">⌕</span>
-              <input aria-label="Métier ou besoin" value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Un métier, un besoin…" />
-              {SpeechRecognition && <button className="voice-search" type="button" onClick={startVoiceSearch} aria-label="Rechercher par la voix" title="Rechercher par la voix">🎙</button>}
-              <span className="search-divider" />
-              <span className="search-pin" aria-hidden="true">⌖</span>
-              <span className="search-city">Côte d'Ivoire</span>
-              <button className="search-submit" type="submit" aria-label="Rechercher">→</button>
-            </form>
+            <div className="quick-start">
+              <div className="quick-start-heading">
+                <span>Par où commencer ?</span>
+                {SpeechRecognition && (
+                  <button className="voice-search" type="button" onClick={startVoiceSearch} aria-label="Rechercher par la voix" title="Rechercher par la voix">
+                    🎙 <span>Recherche vocale</span>
+                  </button>
+                )}
+              </div>
+              <div className="quick-service-grid">
+                {quickServices.map((service) => (
+                  <button className="quick-service" key={service.title} type="button" onClick={() => exploreUniverse(service.search)}>
+                    <span className="quick-service-icon" aria-hidden="true">{service.icon}</span>
+                    <span className="quick-service-copy"><strong>{service.title}</strong><small>{service.detail}</small></span>
+                    <span className="quick-service-arrow" aria-hidden="true">↗</span>
+                  </button>
+                ))}
+              </div>
+            </div>
             {voiceMessage && <p className="voice-message" role="status">{voiceMessage}</p>}
             <div className="cta-row">
               <button className="primary-button" type="button" onClick={() => document.getElementById("artisans").scrollIntoView({ behavior: "smooth" })}>Trouver un pro</button>
@@ -412,12 +268,12 @@ export default function App() {
               <div><strong>4.8/5</strong><span>Note moyenne</span></div>
             </div>
           </div>
-          <div className="hero-visual" aria-label="Logo BaraViteFe">
+          <div className="hero-visual" aria-label="Logo Barra Rapide">
             <div className="network-card">
               <div className="network-orbit orbit-one" />
               <div className="network-orbit orbit-two" />
               <div className="network-orbit orbit-three" />
-              <img src="/logo1.jpeg" alt="Logo BaraViteFe" className="hero-logo" />
+              <img src="/logo1.jpeg" alt="Logo Barra Rapide" className="hero-logo" />
             </div>
           </div>
           <div className="hero-side-note">DES TALENTS LOCAUX, DES SOLUTIONS RAPIDES <span>———</span></div>
@@ -426,7 +282,7 @@ export default function App() {
         <section className="universes" id="univers">
           <div className="section-heading">
             <div>
-              <span className="eyebrow">BaraViteFe, À VOS CÔTÉS AU QUOTIDIEN</span>
+              <span className="eyebrow">BARRA RAPIDE, À VOS CÔTÉS AU QUOTIDIEN</span>
               <h2>11 univers, <span>une seule app.</span></h2>
             </div>
             <p>Les services essentiels réunis au même endroit,<br />pour vous simplifier la vie partout en Côte d'Ivoire.</p>
@@ -471,6 +327,19 @@ export default function App() {
               );
             })}
           </div>
+          <form className="directory-filters" onSubmit={submitFilters}>
+            <label>Métier ou besoin<input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Ex. électricien" maxLength="80" /></label>
+            <label>Ville / commune<input value={cityInput} onChange={(event) => setCityInput(event.target.value)} placeholder="Ex. Abidjan" maxLength="80" /></label>
+            <label>Quartier<input value={neighborhoodInput} onChange={(event) => setNeighborhoodInput(event.target.value)} placeholder="Ex. Cocody" maxLength="80" /></label>
+            <label>Disponibilité
+              <select value={availabilityInput} onChange={(event) => setAvailabilityInput(event.target.value)}>
+                <option value="true">Disponibles</option>
+                <option value="all">Tous</option>
+                <option value="false">Indisponibles</option>
+              </select>
+            </label>
+            <button className="button button-dark" type="submit">Appliquer les filtres</button>
+          </form>
           <div className="results-row">
             <h3>Les pros du moment <span>({professionals.length})</span></h3>
             <span className="sort-note">{clientLocation ? "Triés par proximité" : "Les mieux notés"}</span>
@@ -487,7 +356,7 @@ export default function App() {
           {!loading && !error && professionals.length > 0 && (
             <div className="professional-grid">
               {professionals.map((professional, index) => (
-                <ProfessionalCard key={professional._id} professional={professional} index={index} onContact={setContacting} />
+                <ProfessionalCard key={professional._id} professional={professional} index={index} />
               ))}
             </div>
           )}
@@ -499,23 +368,20 @@ export default function App() {
           <div className="steps">
             <article><span className="step-number">01</span><h3>Choisissez un métier</h3><p>Parcourez les profils ou cherchez le service dont vous avez besoin.</p></article>
             <article><span className="step-number">02</span><h3>Trouvez votre pro</h3><p>Comparez les avis, l'expérience et les disponibilités près de chez vous.</p></article>
-            <article><span className="step-number">03</span><h3>Entrez en contact</h3><p>Envoyez votre demande directement à l'artisan, sans intermédiaire.</p></article>
+            <article><span className="step-number">03</span><h3>Débloquez le contact</h3><p>Payez en Mobile Money et recevez les coordonnées du professionnel après confirmation.</p></article>
           </div>
         </section>
       </main>
 
       <footer className="site-footer">
-        <a className="brand footer-brand" href="#" aria-label="BaraViteFe, accueil"><img src="/logo1.jpeg" alt="BaraViteFe" className="brand-logo" /><span className="brand-name">BaraViteFe</span></a>
+        <a className="brand footer-brand" href="#" aria-label="Barra Rapide, accueil"><img src="/logo1.jpeg" alt="Barra Rapide" className="brand-logo" /><span className="brand-name">Barra Rapide</span></a>
         <span>Le savoir-faire local, à portée de main.</span>
-        <span>© 2027 BaraViteFe · Côte d'Ivoire</span>
+        <nav className="legal-links" aria-label="Informations légales">
+          <Link to="/confidentialite">Confidentialité</Link>
+          <Link to="/cgu">CGU</Link>
+        </nav>
+        <span>© 2026 Barra Rapide · Côte d'Ivoire</span>
       </footer>
-      <ContactDialog professional={contacting} onClose={() => setContacting(null)} />
-      {registering && (
-        <ProfessionalRegistrationDialog
-          onClose={() => setRegistering(false)}
-          onRegistered={() => setProfessionalsVersion((version) => version + 1)}
-        />
-      )}
     </div>
   );
 }
